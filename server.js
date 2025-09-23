@@ -4,8 +4,10 @@ const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Middleware
 app.use(cors());
@@ -298,12 +300,12 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Nutrition Tracker API server running on port ${PORT}`);
+// Start server - bind to 0.0.0.0 for cloud deployment
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 Nutrition Tracker API server running on ${HOST}:${PORT}`);
   console.log(`📊 Database: SQLite (nutrition.db)`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📝 API Docs: http://localhost:${PORT}`);
+  console.log(`📝 API Docs: http://${HOST}:${PORT}`);
 });
 
 // Graceful shutdown
