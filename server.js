@@ -4,7 +4,6 @@ const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -280,20 +279,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Default route for serving frontend (if any)
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Nutrition Tracker API',
-    version: '1.0.0',
-    endpoints: {
-      'POST /api/food-log': 'Log a food item',
-      'GET /api/daily-summary': 'Get daily nutrition summary',
-      'GET /api/food-log': 'Get food log entries',
-      'GET /api/health': 'Health check'
-    },
-    documentation: 'https://github.com/myProjectsRavi/nutrition-tracker-web'
+// Serve React app in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, 'frontend', 'build')));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'build', 'index.html'));
   });
-});
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {
