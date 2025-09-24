@@ -144,6 +144,7 @@ const getNutritionData = async (foodName, quantity, unit) => {
     });
 
     if (!usdaResponse.data.foods || usdaResponse.data.foods.length === 0) {
+      console.warn(`USDA API returned no food matches for query: "${foodName}"`);
       return { calories: null, protein: null, carbs: null, fat: null };
     }
 
@@ -166,15 +167,24 @@ const getNutritionData = async (foodName, quantity, unit) => {
 
     // The API returns values per 100g. We need to adjust for the user's quantity.
     // This is a simplification; accurate conversion between units (e.g., cups to grams) is complex.
-    // For now, we assume the user enters grams or a unit the API understands per 100g.
     const servingSize = 100; // USDA data is per 100g/100ml
-    const multiplier = (unit.toLowerCase() === 'grams' || unit.toLowerCase() === 'g') ? parseFloat(quantity) / servingSize : 1;
+    let multiplier = 1;
 
+    if (unit.toLowerCase() === 'grams' || unit.toLowerCase() === 'g') {
+      // If unit is grams, scale based on the 100g standard
+      multiplier = parseFloat(quantity) / servingSize;
+    } else {
+      // For other units ('servings', 'pieces', etc.), assume the API's 100g value is a reasonable default for one serving/piece.
+      // Then, multiply by the number of servings the user entered.
+      multiplier = parseFloat(quantity);
+    }
+
+    // Round the results to 2 decimal places to avoid floating point inaccuracies
     return {
-      calories: (nutrients.calories || 0) * multiplier,
-      protein: (nutrients.protein || 0) * multiplier,
-      carbs: (nutrients.carbs || 0) * multiplier,
-      fat: (nutrients.fat || 0) * multiplier,
+      calories: parseFloat(((nutrients.calories || 0) * multiplier).toFixed(2)),
+      protein: parseFloat(((nutrients.protein || 0) * multiplier).toFixed(2)),
+      carbs: parseFloat(((nutrients.carbs || 0) * multiplier).toFixed(2)),
+      fat: parseFloat(((nutrients.fat || 0) * multiplier).toFixed(2)),
     };
   } catch (error) {
     console.error('Error fetching from USDA API:', error.message);

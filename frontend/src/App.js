@@ -197,10 +197,10 @@ function App() {
                     <li key={entry.id} className="food-entry">
                       <strong>{entry.food_name}</strong> - {entry.quantity} {entry.unit}
                       <div className="nutrition-info">
-                        Calories: {entry.calories || 'N/A'} | 
-                        Protein: {entry.protein || 'N/A'}g | 
-                        Carbs: {entry.carbs || 'N/A'}g | 
-                        Fat: {entry.fat || 'N/A'}g
+                        Calories: {typeof entry.calories === 'number' ? entry.calories.toFixed(2) : 'N/A'} | 
+                        Protein: {typeof entry.protein === 'number' ? entry.protein.toFixed(2) : 'N/A'}g | 
+                        Carbs: {typeof entry.carbs === 'number' ? entry.carbs.toFixed(2) : 'N/A'}g | 
+                        Fat: {typeof entry.fat === 'number' ? entry.fat.toFixed(2) : 'N/A'}g
                       </div>
                     </li>
                   ))}
@@ -222,19 +222,19 @@ function App() {
                   <div className="nutrition-grid">
                     <div className="nutrition-item">
                       <span className="label">Calories:</span>
-                      <span className="value">{dailySummary.total_calories || 0}</span>
+                      <span className="value">{(dailySummary.total_calories || 0).toFixed(2)}</span>
                     </div>
                     <div className="nutrition-item">
                       <span className="label">Protein:</span>
-                      <span className="value">{dailySummary.total_protein || 0}g</span>
+                      <span className="value">{(dailySummary.total_protein || 0).toFixed(2)}g</span>
                     </div>
                     <div className="nutrition-item">
                       <span className="label">Carbohydrates:</span>
-                      <span className="value">{dailySummary.total_carbs || 0}g</span>
+                      <span className="value">{(dailySummary.total_carbs || 0).toFixed(2)}g</span>
                     </div>
                     <div className="nutrition-item">
                       <span className="label">Fat:</span>
-                      <span className="value">{dailySummary.total_fat || 0}g</span>
+                      <span className="value">{(dailySummary.total_fat || 0).toFixed(2)}g</span>
                     </div>
                   </div>
                 </div>
