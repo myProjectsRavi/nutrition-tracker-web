@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { ToastContainer, toast } from 'react-toastify';
 import './App.css';
+import 'react-toastify/dist/ReactToastify.css';
 
 function App() {
   const [foodData, setFoodData] = useState({
     food: '',
     quantity: '',
-    unit: ''
+    unit: 'grams'
   });
   const [chatMessage, setChatMessage] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
@@ -28,7 +30,7 @@ function App() {
   const fetchDailySummary = async () => {
     try {
       const response = await axios.get(`${API_BASE}/daily-summary`);
-      setDailySummary(response.data);
+      setDailySummary(response.data.data);
     } catch (error) {
       console.error('Error fetching daily summary:', error);
     }
@@ -38,7 +40,7 @@ function App() {
   const fetchFoodLog = async () => {
     try {
       const response = await axios.get(`${API_BASE}/food-log`);
-      setFoodLog(response.data);
+      setFoodLog(response.data.data.items);
     } catch (error) {
       console.error('Error fetching food log:', error);
     }
@@ -54,20 +56,21 @@ function App() {
       const response = await axios.post(`${API_BASE}/food-log`, {
         food_name: foodData.food,
         quantity: parseFloat(foodData.quantity),
-        unit: foodData.unit || 'grams'
+        unit: foodData.unit
       });
       
       // Reset form
-      setFoodData({ food: '', quantity: '', unit: '' });
+      setFoodData({ food: '', quantity: '', unit: 'grams' });
       
       // Refresh data
       await fetchFoodLog();
       await fetchDailySummary();
       
-      alert('Food logged successfully!');
+      toast.success('Food logged successfully!');
     } catch (error) {
       console.error('Error logging food:', error);
-      alert('Error logging food. Please try again.');
+      const errorMessage = error.response?.data?.message || 'Error logging food. Please try again.';
+      toast.error(errorMessage);
     }
     setLoading(false);
   };
@@ -108,6 +111,7 @@ function App() {
 
   return (
     <div className="App">
+      <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} />
       <header className="App-header">
         <h1>Nutrition Tracker</h1>
         <p>Track your daily food intake and nutritional values</p>
@@ -189,17 +193,15 @@ function App() {
               <h3>Recent Entries</h3>
               {foodLog.length > 0 ? (
                 <ul className="food-log-list">
-                  {foodLog.slice(-5).reverse().map((entry, index) => (
-                    <li key={index} className="food-entry">
+                  {foodLog.slice(0, 5).map((entry) => (
+                    <li key={entry.id} className="food-entry">
                       <strong>{entry.food_name}</strong> - {entry.quantity} {entry.unit}
-                      {entry.nutrition && (
-                        <div className="nutrition-info">
-                          Calories: {entry.nutrition.calories} | 
-                          Protein: {entry.nutrition.protein}g | 
-                          Carbs: {entry.nutrition.carbs}g | 
-                          Fat: {entry.nutrition.fat}g
-                        </div>
-                      )}
+                      <div className="nutrition-info">
+                        Calories: {entry.calories || 'N/A'} | 
+                        Protein: {entry.protein || 'N/A'}g | 
+                        Carbs: {entry.carbs || 'N/A'}g | 
+                        Fat: {entry.fat || 'N/A'}g
+                      </div>
                     </li>
                   ))}
                 </ul>

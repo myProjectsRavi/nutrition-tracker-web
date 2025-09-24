@@ -3,8 +3,6 @@ const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
-const nlp = require('compromise');
-const cron = require('node-cron');
 require('dotenv').config();
 
 const app = express();
@@ -58,12 +56,14 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER,
           food_name TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          unit TEXT NOT NULL,
           calories REAL,
           protein REAL,
           carbs REAL,
           fat REAL,
-          quantity REAL DEFAULT 1,
-          log_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          date DATE DEFAULT (DATE('now')),
           FOREIGN KEY(user_id) REFERENCES users(id)
         )
       `);
@@ -88,7 +88,7 @@ const runExecute = (sql, params = []) => new Promise((resolve, reject) => {
 
 // Health check: also verify USDA API connectivity
 app.get('/health', async (req, res) => {
-  const usdaApiKey = process.env.USDA_API_KEY || process.env.FOOD_API_KEY || '';
+  const usdaApiKey = process.env.USDA_API_KEY || '';
   let usdaStatus = { reachable: false, ok: false, status: null, error: null };
 
   try {
@@ -123,20 +123,82 @@ app.get('/health', async (req, res) => {
   }));
 });
 
-// Example: add food log (ensure structured validation errors)
-app.post('/api/food-logs', async (req, res) => {
-  const { user_id, food_name, calories = null, protein = null, carbs = null, fat = null, quantity = 1 } = req.body || {};
+// Helper to get nutrition data from USDA
+const getNutritionData = async (foodName, quantity, unit) => {
+  const apiKey = process.env.USDA_API_KEY;
+  if (!apiKey) {
+    console.warn('USDA_API_KEY not set. Nutritional data will be null.');
+    return { calories: null, protein: null, carbs: null, fat: null };
+  }
 
-  if (!food_name) {
+  try {
+    // The USDA API works best with simple food names.
+    // We'll use the food name as the query.
+    const query = `${quantity} ${unit} ${foodName}`;
+    const usdaResponse = await axios.get('https://api.nal.usda.gov/fdc/v1/foods/search', {
+      params: {
+        api_key: apiKey,
+        query: foodName,
+        pageSize: 1, // Get the most relevant food
+      },
+    });
+
+    if (!usdaResponse.data.foods || usdaResponse.data.foods.length === 0) {
+      return { calories: null, protein: null, carbs: null, fat: null };
+    }
+
+    const food = usdaResponse.data.foods[0];
+    const nutrients = {};
+    
+    // Nutrient IDs for common nutrients
+    const nutrientMap = {
+      '208': 'calories', // Energy in kcal
+      '203': 'protein',  // Protein
+      '205': 'carbs',    // Carbohydrate, by difference
+      '204': 'fat',      // Total lipid (fat)
+    };
+
+    food.foodNutrients.forEach(n => {
+      if (nutrientMap[n.nutrientId]) {
+        nutrients[nutrientMap[n.nutrientId]] = n.value;
+      }
+    });
+
+    // The API returns values per 100g. We need to adjust for the user's quantity.
+    // This is a simplification; accurate conversion between units (e.g., cups to grams) is complex.
+    // For now, we assume the user enters grams or a unit the API understands per 100g.
+    const servingSize = 100; // USDA data is per 100g/100ml
+    const multiplier = (unit.toLowerCase() === 'grams' || unit.toLowerCase() === 'g') ? parseFloat(quantity) / servingSize : 1;
+
+    return {
+      calories: (nutrients.calories || 0) * multiplier,
+      protein: (nutrients.protein || 0) * multiplier,
+      carbs: (nutrients.carbs || 0) * multiplier,
+      fat: (nutrients.fat || 0) * multiplier,
+    };
+  } catch (error) {
+    console.error('Error fetching from USDA API:', error.message);
+    return { calories: null, protein: null, carbs: null, fat: null };
+  }
+};
+
+// Add a food log entry
+app.post('/api/food-log', async (req, res) => {
+  const { food_name, quantity, unit } = req.body || {};
+
+  if (!food_name || !quantity || !unit) {
     return res.status(400).json(makeError('VALIDATION_ERROR', 'food_name is required', {
-      details: { field: 'food_name', reason: 'required' },
+      details: { fields: ['food_name', 'quantity', 'unit'], reason: 'required' },
     }));
   }
 
   try {
+    // Fetch nutritional data
+    const nutrition = await getNutritionData(food_name, quantity, unit);
+
     const result = await runExecute(
-      `INSERT INTO food_logs (user_id, food_name, calories, protein, carbs, fat, quantity) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [user_id || null, food_name, calories, protein, carbs, fat, quantity]
+      `INSERT INTO food_logs (food_name, quantity, unit, calories, protein, carbs, fat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [food_name, quantity, unit, nutrition.calories, nutrition.protein, nutrition.carbs, nutrition.fat]
     );
     return res.status(201).json(makeSuccess('Food log created', { id: result.lastID }));
   } catch (e) {
@@ -145,48 +207,48 @@ app.post('/api/food-logs', async (req, res) => {
 });
 
 // Example: list food logs
-app.get('/api/food-logs', async (req, res) => {
+app.get('/api/food-log', async (req, res) => {
   try {
-    const rows = await runQuery('SELECT * FROM food_logs ORDER BY log_date DESC LIMIT 100');
+    const rows = await runQuery('SELECT * FROM food_logs ORDER BY timestamp DESC LIMIT 100');
     return res.status(200).json(makeSuccess('Food logs fetched', { items: rows }));
   } catch (e) {
     return res.status(500).json(makeError('DB_ERROR', 'Failed to fetch food logs', { details: e.message }));
   }
 });
 
-// Clear logs helper
-const clearFoodLogs = () => new Promise((resolve, reject) => {
-  const started = new Date().toISOString();
-  db.run('DELETE FROM food_logs', [], function (err) {
-    if (err) {
-      return reject({ error: 'DB_ERROR', message: 'Failed to clear food logs', details: err.message, timestamp: new Date().toISOString() });
-    }
-    const result = { rowsDeleted: this.changes, timestamp: new Date().toISOString(), startedAt: started };
-    resolve(result);
-  });
+// Get daily summary
+app.get('/api/daily-summary', async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const rows = await runQuery(
+      `SELECT 
+        SUM(calories) as total_calories,
+        SUM(protein) as total_protein,
+        SUM(carbs) as total_carbs,
+        SUM(fat) as total_fat,
+        COUNT(*) as food_count
+      FROM food_logs WHERE date = ?`,
+      [today]
+    );
+
+    const foodItems = await runQuery(
+      `SELECT food_name as name, quantity, unit FROM food_logs WHERE date = ? ORDER BY timestamp DESC`,
+      [today]
+    );
+
+    const summary = rows[0] || {};
+    summary.foods = foodItems;
+
+    return res.status(200).json(makeSuccess('Daily summary fetched', summary));
+  } catch (e) {
+    return res.status(500).json(makeError('DB_ERROR', 'Failed to fetch daily summary', { details: e.message }));
+  }
 });
 
-// Schedule daily clearing of food_logs at midnight
-cron.schedule('0 0 * * *', async () => {
-  console.log('Running scheduled task: clearing food logs at midnight');
-  try {
-    await clearFoodLogs();
-    console.log('Scheduled food logs clearing completed successfully');
-  } catch (error) {
-    console.error('Scheduled food logs clearing failed:', error);
-  }
-}, { timezone: 'UTC' });
-
-// API endpoint for manual clearing of food logs
-app.post('/api/clear-logs', async (req, res) => {
-  try {
-    console.log('Manual clear-logs request received');
-    const result = await clearFoodLogs();
-    res.status(200).json(makeSuccess('Food logs cleared successfully', { rowsDeleted: result.rowsDeleted, clearedAt: result.timestamp }));
-  } catch (error) {
-    console.error('Manual clear-logs failed:', error);
-    res.status(500).json(makeError(error.error || 'CLEAR_LOGS_ERROR', error.message || 'Failed to clear food logs', { details: error.details || 'Unknown error occurred' }));
-  }
+// Mock chat endpoint
+app.post('/api/chat', (req, res) => {
+  const { message } = req.body;
+  res.json({ response: `I received your message: "${message}". I am a mock assistant.` });
 });
 
 // Catch-all route for SPA - serve index.html for all non-API routes
@@ -210,5 +272,4 @@ app.use((err, req, res, next) => {
 // Start server
 app.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
-  console.log('Food logs will be automatically cleared daily at midnight UTC');
 });
