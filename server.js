@@ -187,6 +187,9 @@ const getNutritionData = async (foodName, quantity, unit) => {
       fat: parseFloat(((nutrients.fat || 0) * multiplier).toFixed(2)),
     };
   } catch (error) {
+    if (error.response && error.response.status === 403) {
+      console.error('CRITICAL: USDA API request failed with 403 Forbidden. This almost always means the USDA_API_KEY is missing or invalid in your environment variables.');
+    }
     console.error('Error fetching from USDA API:', error.message);
     return { calories: null, protein: null, carbs: null, fat: null };
   }
