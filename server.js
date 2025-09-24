@@ -4,28 +4,67 @@ const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-
 // Initialize SQLite Database
 const db = new sqlite3.Database('./nutrition.db', (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
   } else {
     console.log('Connected to SQLite database.');
-    
+
     // Create tables if they don't exist
+    db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS foods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        brand TEXT,
+        serving_size REAL,
+        serving_unit TEXT,
+        calories REAL,
+        protein REAL,
+        carbs REAL,
+        fat REAL,
+        fiber REAL,
+        sugar REAL,
+        sodium REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS diary_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        date DATE NOT NULL DEFAULT (DATE('now')),
+        meal_type TEXT,
+        notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+
     db.run(`
       CREATE TABLE IF NOT EXISTS food_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT DEFAULT 'default_user',
+        user_id INTEGER NOT NULL,
+        diary_entry_id INTEGER,
+        food_id INTEGER,
         food_name TEXT NOT NULL,
         quantity REAL NOT NULL,
         unit TEXT NOT NULL,
@@ -37,23 +76,17 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
         sugar REAL,
         sodium REAL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        date DATE DEFAULT (DATE('now'))
+        date DATE DEFAULT (DATE('now')),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (diary_entry_id) REFERENCES diary_entries(id),
+        FOREIGN KEY (food_id) REFERENCES foods(id)
       )
     `);
-    
-    db.run(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        email TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    
+
     // Insert default user if not exists
     db.run(`
-      INSERT OR IGNORE INTO users (id, name, email) 
-      VALUES ('default_user', 'Default User', 'user@example.com')
+      INSERT OR IGNORE INTO users (id, name, email, password)
+      VALUES (1, 'Default User', 'user@example.com', 'changeme')
     `);
   }
 });
@@ -66,15 +99,15 @@ async function getNutritionData(foodName) {
       console.log('USDA API key not found, using default nutritional values');
       return getDefaultNutrition(foodName);
     }
-    
+
     const response = await axios.get(
       `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(foodName)}&api_key=${apiKey}&pageSize=1`
     );
-    
+
     if (response.data.foods && response.data.foods.length > 0) {
       const food = response.data.foods[0];
       const nutrients = food.foodNutrients;
-      
+
       return {
         calories: findNutrient(nutrients, 'Energy') || 50,
         protein: findNutrient(nutrients, 'Protein') || 2,
@@ -88,7 +121,7 @@ async function getNutritionData(foodName) {
   } catch (error) {
     console.log('Error fetching nutrition data:', error.message);
   }
-  
+
   return getDefaultNutrition(foodName);
 }
 
@@ -106,34 +139,33 @@ function getDefaultNutrition(foodName) {
     chicken: { calories: 165, protein: 31, carbs: 0, fat: 3.6, fiber: 0, sugar: 0, sodium: 74 },
     bread: { calories: 265, protein: 9, carbs: 49, fat: 3.2, fiber: 2.8, sugar: 5, sodium: 491 }
   };
-  
+
   const lowerFoodName = foodName.toLowerCase();
   for (const [key, value] of Object.entries(defaults)) {
     if (lowerFoodName.includes(key)) {
       return value;
     }
   }
-  
+
   // Generic default
   return { calories: 100, protein: 3, carbs: 15, fat: 2, fiber: 1, sugar: 5, sodium: 50 };
 }
 
 // API Routes
-
 // POST /api/food-log - Log a food item
 app.post('/api/food-log', async (req, res) => {
   try {
-    const { food_name, quantity, unit, user_id = 'default_user' } = req.body;
-    
+    const { food_name, quantity, unit, user_id = 1, diary_entry_id, food_id } = req.body;
+
     if (!food_name || !quantity || !unit) {
       return res.status(400).json({ 
         error: 'Missing required fields: food_name, quantity, unit' 
       });
     }
-    
+
     // Get nutrition data
     const nutritionData = await getNutritionData(food_name);
-    
+
     // Calculate nutritional values based on quantity
     const multiplier = quantity / 100; // Assuming nutrition data is per 100g/ml
     const calculatedNutrition = {
@@ -145,16 +177,18 @@ app.post('/api/food-log', async (req, res) => {
       sugar: Math.round(nutritionData.sugar * multiplier * 10) / 10,
       sodium: Math.round(nutritionData.sodium * multiplier * 10) / 10
     };
-    
+
     // Insert into database
     const sql = `
       INSERT INTO food_logs (
-        user_id, food_name, quantity, unit, calories, protein, carbs, fat, fiber, sugar, sodium
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        user_id, diary_entry_id, food_id, food_name, quantity, unit, calories, protein, carbs, fat, fiber, sugar, sodium
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    
+
     db.run(sql, [
       user_id,
+      diary_entry_id || null,
+      food_id || null,
       food_name,
       quantity,
       unit,
@@ -170,7 +204,7 @@ app.post('/api/food-log', async (req, res) => {
         console.error('Database error:', err);
         return res.status(500).json({ error: 'Failed to log food item' });
       }
-      
+
       res.status(201).json({
         id: this.lastID,
         message: 'Food logged successfully',
@@ -182,7 +216,7 @@ app.post('/api/food-log', async (req, res) => {
         }
       });
     });
-    
+
   } catch (error) {
     console.error('Error logging food:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -192,9 +226,9 @@ app.post('/api/food-log', async (req, res) => {
 // GET /api/daily-summary - Get daily nutrition summary
 app.get('/api/daily-summary', (req, res) => {
   try {
-    const { date, user_id = 'default_user' } = req.query;
+    const { date, user_id = 1 } = req.query;
     const targetDate = date || new Date().toISOString().split('T')[0];
-    
+
     const sql = `
       SELECT 
         COUNT(*) as total_items,
@@ -208,13 +242,13 @@ app.get('/api/daily-summary', (req, res) => {
       FROM food_logs 
       WHERE user_id = ? AND date = ?
     `;
-    
+
     db.get(sql, [user_id, targetDate], (err, row) => {
       if (err) {
         console.error('Database error:', err);
         return res.status(500).json({ error: 'Failed to fetch daily summary' });
       }
-      
+
       const summary = {
         date: targetDate,
         total_items: row.total_items || 0,
@@ -228,10 +262,10 @@ app.get('/api/daily-summary', (req, res) => {
           sodium: Math.round((row.total_sodium || 0) * 10) / 10
         }
       };
-      
+
       res.json(summary);
     });
-    
+
   } catch (error) {
     console.error('Error fetching daily summary:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -241,30 +275,30 @@ app.get('/api/daily-summary', (req, res) => {
 // GET /api/food-log - Get food log entries
 app.get('/api/food-log', (req, res) => {
   try {
-    const { date, user_id = 'default_user', limit = 50 } = req.query;
+    const { date, user_id = 1, limit = 50 } = req.query;
     let sql = 'SELECT * FROM food_logs WHERE user_id = ?';
     const params = [user_id];
-    
+
     if (date) {
       sql += ' AND date = ?';
       params.push(date);
     }
-    
+
     sql += ' ORDER BY timestamp DESC LIMIT ?';
     params.push(parseInt(limit));
-    
+
     db.all(sql, params, (err, rows) => {
       if (err) {
         console.error('Database error:', err);
         return res.status(500).json({ error: 'Failed to fetch food log' });
       }
-      
+
       res.json({
         count: rows.length,
         food_logs: rows
       });
     });
-    
+
   } catch (error) {
     console.error('Error fetching food log:', error);
     res.status(500).json({ error: 'Internal server error' });
