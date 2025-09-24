@@ -3,21 +3,25 @@ const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
+// Add compromise for natural language processing
+const nlp = require('compromise');
 require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
 // Initialize SQLite Database
 const db = new sqlite3.Database('./nutrition.db', (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
   } else {
     console.log('Connected to SQLite database.');
-
     // Ensure sequential execution of setup queries
     db.serialize(() => {
       // Create tables if they don't exist
@@ -30,7 +34,7 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
-
+      
       db.run(`
         CREATE TABLE IF NOT EXISTS foods (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,25 +52,11 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
-
-      db.run(`
-        CREATE TABLE IF NOT EXISTS diary_entries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL,
-          date DATE NOT NULL DEFAULT (DATE('now')),
-          meal_type TEXT,
-          notes TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-      `);
-
+      
       db.run(`
         CREATE TABLE IF NOT EXISTS food_logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL,
-          diary_entry_id INTEGER,
-          food_id INTEGER,
           food_name TEXT NOT NULL,
           quantity REAL NOT NULL,
           unit TEXT NOT NULL,
@@ -77,233 +67,257 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
           fiber REAL,
           sugar REAL,
           sodium REAL,
-          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-          date DATE DEFAULT (DATE('now')),
-          FOREIGN KEY (user_id) REFERENCES users(id),
-          FOREIGN KEY (diary_entry_id) REFERENCES diary_entries(id),
-          FOREIGN KEY (food_id) REFERENCES foods(id)
+          logged_date DATE NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id)
         )
       `);
-
-      // Insert default user if not exists (requires the users table to exist)
-      db.run(
-        `INSERT OR IGNORE INTO users (id, name, email, password) VALUES (1, 'Default User', 'user@example.com', 'changeme')`
-      );
     });
   }
 });
 
-// Helper function to get nutrition data from USDA API
-async function getNutritionData(foodName) {
+// Helper function to parse natural language food descriptions
+function parseFoodDescription(text) {
+  let parsedItems = [];
+  
   try {
-    const apiKey = process.env.USDA_API_KEY;
-    if (!apiKey) {
-      console.log('USDA API key not found, using default nutritional values');
-      return getDefaultNutrition(foodName);
-    }
-
-    const response = await axios.get(
-      `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(foodName)}&api_key=${apiKey}&pageSize=1`
-    );
-
-    if (response.data.foods && response.data.foods.length > 0) {
-      const food = response.data.foods[0];
-      const nutrients = food.foodNutrients;
-
-      return {
-        calories: findNutrient(nutrients, 'Energy') || 50,
-        protein: findNutrient(nutrients, 'Protein') || 2,
-        carbs: findNutrient(nutrients, 'Carbohydrate') || 10,
-        fat: findNutrient(nutrients, 'Total lipid') || 1,
-        fiber: findNutrient(nutrients, 'Fiber') || 1,
-        sugar: findNutrient(nutrients, 'Sugars') || 2,
-        sodium: findNutrient(nutrients, 'Sodium') || 50
-      };
-    }
-  } catch (error) {
-    console.log('Error fetching nutrition data:', error.message);
-  }
-
-  return getDefaultNutrition(foodName);
-}
-
-function findNutrient(nutrients, name) {
-  const nutrient = nutrients.find(n => n.nutrientName && n.nutrientName.includes(name));
-  return nutrient ? nutrient.value : null;
-}
-
-function getDefaultNutrition(foodName) {
-  // Provide reasonable defaults based on common foods
-  const defaults = {
-    apple: { calories: 52, protein: 0.3, carbs: 14, fat: 0.2, fiber: 2.4, sugar: 10, sodium: 1 },
-    banana: { calories: 89, protein: 1.1, carbs: 23, fat: 0.3, fiber: 2.6, sugar: 12, sodium: 1 },
-    rice: { calories: 130, protein: 2.7, carbs: 28, fat: 0.3, fiber: 0.4, sugar: 0.1, sodium: 5 },
-    chicken: { calories: 165, protein: 31, carbs: 0, fat: 3.6, fiber: 0, sugar: 0, sodium: 74 },
-    bread: { calories: 265, protein: 9, carbs: 49, fat: 3.2, fiber: 2.8, sugar: 5, sodium: 491 }
-  };
-
-  const lowerFoodName = foodName.toLowerCase();
-  for (const [key, value] of Object.entries(defaults)) {
-    if (lowerFoodName.includes(key)) {
-      return value;
-    }
-  }
-
-  // Generic default
-  return { calories: 100, protein: 3, carbs: 15, fat: 2, fiber: 1, sugar: 5, sodium: 50 };
-}
-
-// API Routes
-// POST /api/food-log - Log a food item
-app.post('/api/food-log', async (req, res) => {
-  try {
-    const { food_name, quantity, unit, user_id = 1, diary_entry_id, food_id } = req.body;
-
-    if (!food_name || !quantity || !unit) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: food_name, quantity, unit' 
+    // Use compromise for better natural language parsing
+    const doc = nlp(text);
+    
+    // Extract quantities and units
+    const quantities = doc.match('#Value+ #Noun?').out('array');
+    const foods = doc.match('#Noun').not('#Value').not('#Unit').out('array');
+    
+    // If compromise parsing works, use it
+    if (quantities.length > 0 && foods.length > 0) {
+      quantities.forEach((quantityText, index) => {
+        const food = foods[index] || foods[0]; // fallback to first food if not enough
+        const match = quantityText.match(/(\d+(?:\.\d+)?)\s*(\w+)?/);
+        
+        if (match && food) {
+          parsedItems.push({
+            food: food.toLowerCase().trim(),
+            quantity: parseFloat(match[1]),
+            unit: match[2] || 'serving'
+          });
+        }
       });
     }
+  } catch (error) {
+    console.log('Compromise parsing failed, falling back to regex:', error.message);
+  }
+  
+  // Fallback: regex-based parsing if compromise fails
+  if (parsedItems.length === 0) {
+    // Common patterns: "2 apples", "1 cup rice", "3 slices bread"
+    const patterns = [
+      /(\d+(?:\.\d+)?)\s*(cups?|slices?|pieces?|servings?|grams?|g|oz|ounces?|lbs?|pounds?)\s+(?:of\s+)?([\w\s]+)/gi,
+      /(\d+(?:\.\d+)?)\s+([\w\s]+?)(?:\s|$)/gi
+    ];
+    
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        parsedItems.push({
+          food: (match[3] || match[2]).toLowerCase().trim(),
+          quantity: parseFloat(match[1]),
+          unit: match[3] ? match[2] : 'serving'
+        });
+      }
+      if (parsedItems.length > 0) break;
+    }
+  }
+  
+  return parsedItems;
+}
 
-    // Get nutrition data
-    const nutritionData = await getNutritionData(food_name);
-
-    // Calculate nutritional values based on quantity
-    const multiplier = quantity / 100; // Assuming nutrition data is per 100g/ml
-    const calculatedNutrition = {
-      calories: Math.round(nutritionData.calories * multiplier * 10) / 10,
-      protein: Math.round(nutritionData.protein * multiplier * 10) / 10,
-      carbs: Math.round(nutritionData.carbs * multiplier * 10) / 10,
-      fat: Math.round(nutritionData.fat * multiplier * 10) / 10,
-      fiber: Math.round(nutritionData.fiber * multiplier * 10) / 10,
-      sugar: Math.round(nutritionData.sugar * multiplier * 10) / 10,
-      sodium: Math.round(nutritionData.sodium * multiplier * 10) / 10
+// Helper function to search USDA FoodData Central API
+async function searchUSDAFood(foodName) {
+  const apiKey = process.env.USDA_API_KEY;
+  
+  if (!apiKey) {
+    throw new Error('USDA_API_KEY not found in environment variables. Please check your .env file.');
+  }
+  
+  try {
+    const searchResponse = await axios.get('https://api.nal.usda.gov/fdc/v1/foods/search', {
+      params: {
+        query: foodName,
+        api_key: apiKey,
+        pageSize: 1,
+        dataType: ['Branded', 'Foundation', 'SR Legacy']
+      }
+    });
+    
+    if (!searchResponse.data.foods || searchResponse.data.foods.length === 0) {
+      return null;
+    }
+    
+    const food = searchResponse.data.foods[0];
+    const nutrients = {};
+    
+    // Extract key nutrients
+    if (food.foodNutrients) {
+      food.foodNutrients.forEach(nutrient => {
+        switch (nutrient.nutrientId) {
+          case 1008: // Energy (calories)
+            nutrients.calories = nutrient.value;
+            break;
+          case 1003: // Protein
+            nutrients.protein = nutrient.value;
+            break;
+          case 1005: // Carbohydrates
+            nutrients.carbs = nutrient.value;
+            break;
+          case 1004: // Total lipid (fat)
+            nutrients.fat = nutrient.value;
+            break;
+          case 1079: // Fiber
+            nutrients.fiber = nutrient.value;
+            break;
+          case 2000: // Sugars
+            nutrients.sugar = nutrient.value;
+            break;
+          case 1093: // Sodium
+            nutrients.sodium = nutrient.value;
+            break;
+        }
+      });
+    }
+    
+    return {
+      name: food.description,
+      brand: food.brandOwner || null,
+      nutrients
     };
+    
+  } catch (error) {
+    console.error('USDA API error:', error.message);
+    return null;
+  }
+}
 
-    // Insert into database
-    const sql = `
-      INSERT INTO food_logs (
-        user_id, diary_entry_id, food_id, food_name, quantity, unit, calories, protein, carbs, fat, fiber, sugar, sodium
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-
-    db.run(sql, [
-      user_id,
-      diary_entry_id || null,
-      food_id || null,
-      food_name,
-      quantity,
-      unit,
-      calculatedNutrition.calories,
-      calculatedNutrition.protein,
-      calculatedNutrition.carbs,
-      calculatedNutrition.fat,
-      calculatedNutrition.fiber,
-      calculatedNutrition.sugar,
-      calculatedNutrition.sodium
-    ], function(err) {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Failed to log food item' });
-      }
-
-      res.status(201).json({
-        id: this.lastID,
-        message: 'Food logged successfully',
-        data: {
-          food_name,
-          quantity,
-          unit,
-          ...calculatedNutrition
-        }
+// /api/chat POST endpoint
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { message, userId } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Message is required'
       });
-    });
-
-  } catch (error) {
-    console.error('Error logging food:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// GET /api/daily-summary - Get daily nutrition summary
-app.get('/api/daily-summary', (req, res) => {
-  try {
-    const { date, user_id = 1 } = req.query;
-    const targetDate = date || new Date().toISOString().split('T')[0];
-
-    const sql = `
-      SELECT 
-        COUNT(*) as total_items,
-        SUM(calories) as total_calories,
-        SUM(protein) as total_protein,
-        SUM(carbs) as total_carbs,
-        SUM(fat) as total_fat,
-        SUM(fiber) as total_fiber,
-        SUM(sugar) as total_sugar,
-        SUM(sodium) as total_sodium
-      FROM food_logs 
-      WHERE user_id = ? AND date = ?
-    `;
-
-    db.get(sql, [user_id, targetDate], (err, row) => {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Failed to fetch daily summary' });
-      }
-
-      const summary = {
-        date: targetDate,
-        total_items: row.total_items || 0,
-        nutrition: {
-          calories: Math.round((row.total_calories || 0) * 10) / 10,
-          protein: Math.round((row.total_protein || 0) * 10) / 10,
-          carbs: Math.round((row.total_carbs || 0) * 10) / 10,
-          fat: Math.round((row.total_fat || 0) * 10) / 10,
-          fiber: Math.round((row.total_fiber || 0) * 10) / 10,
-          sugar: Math.round((row.total_sugar || 0) * 10) / 10,
-          sodium: Math.round((row.total_sodium || 0) * 10) / 10
-        }
-      };
-
-      res.json(summary);
-    });
-
-  } catch (error) {
-    console.error('Error fetching daily summary:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// GET /api/food-log - Get food log entries
-app.get('/api/food-log', (req, res) => {
-  try {
-    const { date, user_id = 1, limit = 50 } = req.query;
-    let sql = 'SELECT * FROM food_logs WHERE user_id = ?';
-    const params = [user_id];
-
-    if (date) {
-      sql += ' AND date = ?';
-      params.push(date);
     }
-
-    sql += ' ORDER BY timestamp DESC LIMIT ?';
-    params.push(parseInt(limit));
-
-    db.all(sql, params, (err, rows) => {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Failed to fetch food log' });
-      }
-
-      res.json({
-        count: rows.length,
-        food_logs: rows
+    
+    if (!userId) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'User ID is required'
       });
+    }
+    
+    // Check if USDA API key is available
+    if (!process.env.USDA_API_KEY) {
+      return res.status(500).json({
+        error: 'Configuration Error',
+        message: 'USDA API key not configured. Please add USDA_API_KEY to your .env file. Check .env.example for reference.'
+      });
+    }
+    
+    // Parse the natural language food description
+    const parsedItems = parseFoodDescription(message);
+    
+    if (parsedItems.length === 0) {
+      return res.status(400).json({
+        error: 'Parse Error',
+        message: 'Could not understand the food description. Please try something like "2 apples" or "1 cup rice"'
+      });
+    }
+    
+    const breakdown = [];
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    
+    // Process each parsed food item
+    for (const item of parsedItems) {
+      try {
+        const nutritionData = await searchUSDAFood(item.food);
+        
+        if (!nutritionData) {
+          breakdown.push({
+            food: item.food,
+            quantity: item.quantity,
+            unit: item.unit,
+            status: 'error',
+            message: 'Nutrition data not found'
+          });
+          continue;
+        }
+        
+        // Calculate nutrition based on quantity (assuming USDA data is per 100g)
+        const multiplier = item.quantity / 100; // Rough estimation
+        const calculatedNutrition = {
+          calories: (nutritionData.nutrients.calories || 0) * multiplier,
+          protein: (nutritionData.nutrients.protein || 0) * multiplier,
+          carbs: (nutritionData.nutrients.carbs || 0) * multiplier,
+          fat: (nutritionData.nutrients.fat || 0) * multiplier,
+          fiber: (nutritionData.nutrients.fiber || 0) * multiplier,
+          sugar: (nutritionData.nutrients.sugar || 0) * multiplier,
+          sodium: (nutritionData.nutrients.sodium || 0) * multiplier
+        };
+        
+        // Log to database
+        db.run(`
+          INSERT INTO food_logs (
+            user_id, food_name, quantity, unit, calories, protein, carbs, 
+            fat, fiber, sugar, sodium, logged_date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          userId,
+          nutritionData.name,
+          item.quantity,
+          item.unit,
+          calculatedNutrition.calories,
+          calculatedNutrition.protein,
+          calculatedNutrition.carbs,
+          calculatedNutrition.fat,
+          calculatedNutrition.fiber,
+          calculatedNutrition.sugar,
+          calculatedNutrition.sodium,
+          today
+        ]);
+        
+        breakdown.push({
+          food: nutritionData.name,
+          brand: nutritionData.brand,
+          quantity: item.quantity,
+          unit: item.unit,
+          nutrition: calculatedNutrition,
+          status: 'logged'
+        });
+        
+      } catch (error) {
+        console.error('Error processing food item:', error.message);
+        breakdown.push({
+          food: item.food,
+          quantity: item.quantity,
+          unit: item.unit,
+          status: 'error',
+          message: error.message
+        });
+      }
+    }
+    
+    res.json({
+      status: 'Noted',
+      breakdown: breakdown
     });
-
+    
   } catch (error) {
-    console.error('Error fetching food log:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Chat endpoint error:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'An unexpected error occurred while processing your request'
+    });
   }
 });
 
@@ -320,6 +334,7 @@ app.get('/api/health', (req, res) => {
 // Serve React app in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'frontend', 'build')));
+  
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'build', 'index.html'));
   });
