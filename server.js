@@ -20,6 +20,7 @@ const makeError = (code, message, options = {}) => ({
   meta: options.meta || null,
   timestamp: new Date().toISOString(),
 });
+
 const makeSuccess = (message, data = {}, meta = null) => ({
   success: true,
   message,
@@ -31,7 +32,7 @@ const makeSuccess = (message, data = {}, meta = null) => ({
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'frontend', 'build')));
 
 // Initialize SQLite Database
 const db = new sqlite3.Database('./nutrition.db', (err) => {
@@ -51,6 +52,7 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
+
       db.run(`
         CREATE TABLE IF NOT EXISTS food_logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +78,7 @@ const runQuery = (sql, params = []) => new Promise((resolve, reject) => {
     resolve(rows);
   });
 });
+
 const runExecute = (sql, params = []) => new Promise((resolve, reject) => {
   db.run(sql, params, function (err) {
     if (err) return reject(err);
@@ -123,11 +126,13 @@ app.get('/health', async (req, res) => {
 // Example: add food log (ensure structured validation errors)
 app.post('/api/food-logs', async (req, res) => {
   const { user_id, food_name, calories = null, protein = null, carbs = null, fat = null, quantity = 1 } = req.body || {};
+
   if (!food_name) {
     return res.status(400).json(makeError('VALIDATION_ERROR', 'food_name is required', {
       details: { field: 'food_name', reason: 'required' },
     }));
   }
+
   try {
     const result = await runExecute(
       `INSERT INTO food_logs (user_id, food_name, calories, protein, carbs, fat, quantity) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -182,6 +187,11 @@ app.post('/api/clear-logs', async (req, res) => {
     console.error('Manual clear-logs failed:', error);
     res.status(500).json(makeError(error.error || 'CLEAR_LOGS_ERROR', error.message || 'Failed to clear food logs', { details: error.details || 'Unknown error occurred' }));
   }
+});
+
+// Catch-all route for SPA - serve index.html for all non-API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'build', 'index.html'));
 });
 
 // Global 404 for unknown routes
