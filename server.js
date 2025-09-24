@@ -18,76 +18,78 @@ const db = new sqlite3.Database('./nutrition.db', (err) => {
   } else {
     console.log('Connected to SQLite database.');
 
-    // Create tables if they don't exist
-    db.run(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    // Ensure sequential execution of setup queries
+    db.serialize(() => {
+      // Create tables if they don't exist
+      db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          password TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
-    db.run(`
-      CREATE TABLE IF NOT EXISTS foods (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        brand TEXT,
-        serving_size REAL,
-        serving_unit TEXT,
-        calories REAL,
-        protein REAL,
-        carbs REAL,
-        fat REAL,
-        fiber REAL,
-        sugar REAL,
-        sodium REAL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+      db.run(`
+        CREATE TABLE IF NOT EXISTS foods (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          brand TEXT,
+          serving_size REAL,
+          serving_unit TEXT,
+          calories REAL,
+          protein REAL,
+          carbs REAL,
+          fat REAL,
+          fiber REAL,
+          sugar REAL,
+          sodium REAL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
-    db.run(`
-      CREATE TABLE IF NOT EXISTS diary_entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        date DATE NOT NULL DEFAULT (DATE('now')),
-        meal_type TEXT,
-        notes TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      )
-    `);
+      db.run(`
+        CREATE TABLE IF NOT EXISTS diary_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          date DATE NOT NULL DEFAULT (DATE('now')),
+          meal_type TEXT,
+          notes TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+      `);
 
-    db.run(`
-      CREATE TABLE IF NOT EXISTS food_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        diary_entry_id INTEGER,
-        food_id INTEGER,
-        food_name TEXT NOT NULL,
-        quantity REAL NOT NULL,
-        unit TEXT NOT NULL,
-        calories REAL,
-        protein REAL,
-        carbs REAL,
-        fat REAL,
-        fiber REAL,
-        sugar REAL,
-        sodium REAL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        date DATE DEFAULT (DATE('now')),
-        FOREIGN KEY (user_id) REFERENCES users(id),
-        FOREIGN KEY (diary_entry_id) REFERENCES diary_entries(id),
-        FOREIGN KEY (food_id) REFERENCES foods(id)
-      )
-    `);
+      db.run(`
+        CREATE TABLE IF NOT EXISTS food_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          diary_entry_id INTEGER,
+          food_id INTEGER,
+          food_name TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          unit TEXT NOT NULL,
+          calories REAL,
+          protein REAL,
+          carbs REAL,
+          fat REAL,
+          fiber REAL,
+          sugar REAL,
+          sodium REAL,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          date DATE DEFAULT (DATE('now')),
+          FOREIGN KEY (user_id) REFERENCES users(id),
+          FOREIGN KEY (diary_entry_id) REFERENCES diary_entries(id),
+          FOREIGN KEY (food_id) REFERENCES foods(id)
+        )
+      `);
 
-    // Insert default user if not exists
-    db.run(`
-      INSERT OR IGNORE INTO users (id, name, email, password)
-      VALUES (1, 'Default User', 'user@example.com', 'changeme')
-    `);
+      // Insert default user if not exists (requires the users table to exist)
+      db.run(
+        `INSERT OR IGNORE INTO users (id, name, email, password) VALUES (1, 'Default User', 'user@example.com', 'changeme')`
+      );
+    });
   }
 });
 
