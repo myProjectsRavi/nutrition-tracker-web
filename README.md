@@ -6,11 +6,12 @@ A comprehensive web-based nutrition tracking application built with Node.js, Exp
 
 - **📝 Food Logging**: Log food items with quantity and unit measurements
 - **📊 Daily Summaries**: Get comprehensive daily nutrition summaries
-- **🔍 USDA Integration**: Automatic nutritional data lookup using USDA FoodData Central API
+- **🍎 Open Food Facts Integration**: Automatic nutritional data lookup using the completely free Open Food Facts API (no API key required!)
 - **💾 SQLite Database**: Local database storage for reliability and performance
 - **🌐 RESTful API**: Clean, documented API endpoints
 - **🔒 Environment Configuration**: Secure environment variable management
 - **☁️ Cloud Ready**: Optimized for Render.com deployment
+- **🆓 100% Free**: No API keys or paid services required
 
 ## 🚀 Quick Start
 
@@ -18,7 +19,7 @@ A comprehensive web-based nutrition tracking application built with Node.js, Exp
 
 - Node.js (v14 or higher)
 - npm or yarn
-- USDA API key (free at https://fdc.nal.usda.gov/api-guide.html)
+- **No API key required!** - Uses Open Food Facts free API
 
 ### Installation
 
@@ -33,13 +34,7 @@ A comprehensive web-based nutrition tracking application built with Node.js, Exp
    npm install
    ```
 
-3. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your USDA API key
-   ```
-
-4. **Start the server**
+3. **Start the server** (No additional setup needed!)
    ```bash
    # Development mode
    npm run dev
@@ -48,15 +43,15 @@ A comprehensive web-based nutrition tracking application built with Node.js, Exp
    npm start
    ```
 
-5. **Test the API**
+4. **Test the API**
    ```bash
-   curl http://localhost:3000/api/health
+   curl http://localhost:3000/health
    ```
 
 ## 📡 API Endpoints
 
 ### Health Check
-- **GET** `/api/health` - Check API status
+- **GET** `/health` - Check API status and Open Food Facts connectivity
 
 ### Food Logging
 - **POST** `/api/food-log` - Log a food item
@@ -80,16 +75,16 @@ curl -X POST http://localhost:3000/api/food-log \
 
 #### Get Daily Summary
 ```bash
-curl "http://localhost:3000/api/daily-summary?date=2025-09-22"
+curl "http://localhost:3000/api/daily-summary"
 ```
 
 ## 🏗️ Project Structure
 
 ```
 nutrition-tracker-web/
-├── server.js              # Main server file
+├── server.js              # Main server file with Open Food Facts integration
 ├── package.json           # Dependencies and scripts
-├── .env.example          # Environment variables template
+├── .env.example          # Environment variables template (optional)
 ├── .gitignore            # Git ignore patterns
 ├── README.md             # Project documentation
 └── nutrition.db          # SQLite database (created automatically)
@@ -99,37 +94,37 @@ nutrition-tracker-web/
 
 - **Backend**: Node.js + Express.js
 - **Database**: SQLite3
-- **External API**: USDA FoodData Central
-- **Environment**: dotenv
+- **External API**: Open Food Facts (100% free, no registration required)
+- **Environment**: dotenv (optional)
 - **CORS**: cors middleware
 - **HTTP Client**: axios
 
 ## 🌍 Environment Variables
 
+All environment variables are optional. The app works out of the box with sensible defaults.
+
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `PORT` | Server port | No | 3000 |
-| `NODE_ENV` | Environment mode | No | development |
-| `USDA_API_KEY` | USDA FoodData Central API key | Recommended | - |
-| `DATABASE_PATH` | SQLite database path | No | ./nutrition.db |
-| `CORS_ORIGIN` | CORS allowed origins | No | * |
+| PORT | Server port | No | 3000 |
+| NODE_ENV | Environment mode | No | development |
+| HOST | Server host | No | 0.0.0.0 |
+| DATABASE_PATH | SQLite database path | No | ./nutrition.db |
+| CORS_ORIGIN | CORS allowed origins | No | * |
 
 ## 📦 Deployment
 
 ### Render.com Deployment
 
-1. **Connect your GitHub repository** to Render.com
-2. **Set environment variables** in Render dashboard:
-   - `NODE_ENV=production`
-   - `USDA_API_KEY=your_api_key_here`
-3. **Deploy** using the following settings:
-   - Build Command: `npm install`
-   - Start Command: `npm start`
+1. Connect your GitHub repository to Render.com
+2. **No environment variables required!** The app works with defaults
+3. Deploy using the following settings:
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
 
 ### Local Production Build
 
 ```bash
-# Set production environment
+# Set production environment (optional)
 export NODE_ENV=production
 
 # Start the server
@@ -142,7 +137,7 @@ You can test the API using curl, Postman, or any HTTP client:
 
 ```bash
 # Health check
-curl http://localhost:3000/api/health
+curl http://localhost:3000/health
 
 # Log food
 curl -X POST http://localhost:3000/api/food-log \
@@ -159,7 +154,6 @@ curl http://localhost:3000/api/food-log
 ## 🔧 Development
 
 ### Scripts
-
 - `npm start` - Start production server
 - `npm run dev` - Start development server with nodemon
 - `npm test` - Run tests (to be implemented)
@@ -170,7 +164,7 @@ curl http://localhost:3000/api/food-log
 ```sql
 CREATE TABLE food_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT DEFAULT 'default_user',
+  user_id INTEGER,
   food_name TEXT NOT NULL,
   quantity REAL NOT NULL,
   unit TEXT NOT NULL,
@@ -178,13 +172,31 @@ CREATE TABLE food_logs (
   protein REAL,
   carbs REAL,
   fat REAL,
-  fiber REAL,
-  sugar REAL,
-  sodium REAL,
   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-  date DATE DEFAULT (DATE('now'))
+  date DATE DEFAULT (DATE('now')),
+  FOREIGN KEY(user_id) REFERENCES users(id)
 );
 ```
+
+## 🍎 About Open Food Facts
+
+[Open Food Facts](https://world.openfoodfacts.org/) is a free, open, collaborative database of food products from around the world. It provides:
+
+- ✅ **Completely Free**: No API keys, registration, or rate limits
+- ✅ **Comprehensive Data**: Millions of food products worldwide
+- ✅ **Real Nutrition Data**: Actual nutrition facts from product labels
+- ✅ **Community Driven**: Crowdsourced and verified by users
+- ✅ **No Dependencies**: Works without any external accounts
+
+## 🚨 API Migration Notice
+
+**Updated from USDA API**: This application previously used the USDA FoodData Central API, which required an API key and had rate limits. We've migrated to Open Food Facts API for the following benefits:
+
+- 🆓 No API key required
+- 🚫 No rate limits
+- 🌍 Global food database (not just US foods)
+- ⚡ Faster setup (no registration needed)
+- 📈 Better reliability
 
 ## 🤝 Contributing
 
@@ -200,7 +212,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🌟 Acknowledgments
 
-- [USDA FoodData Central](https://fdc.nal.usda.gov/) for nutritional data
+- [Open Food Facts](https://world.openfoodfacts.org/) for providing free, comprehensive nutrition data
 - [Express.js](https://expressjs.com/) for the web framework
 - [SQLite](https://www.sqlite.org/) for the database
 - [Render.com](https://render.com/) for hosting recommendations
@@ -216,3 +228,5 @@ If you have any questions or run into issues, please:
 ---
 
 **Built with ❤️ by myProjectsRavi**
+
+*Now with 100% free nutrition data - no API keys required!*
