@@ -86,26 +86,29 @@ const runExecute = (sql, params = []) => new Promise((resolve, reject) => {
   });
 });
 
-// Health check: also verify USDA API connectivity
+// Health check: verify Open Food Facts API connectivity
 app.get('/health', async (req, res) => {
-  const usdaApiKey = process.env.USDA_API_KEY || '';
-  let usdaStatus = { reachable: false, ok: false, status: null, error: null };
+  let offStatus = { reachable: false, ok: false, status: null, error: null };
 
   try {
-    // lightweight USDA test request (example: FoodData Central search endpoint)
-    const url = 'https://api.nal.usda.gov/fdc/v1/foods/search';
+    // Test Open Food Facts API (completely free, no API key required)
+    const url = 'https://world.openfoodfacts.org/api/v2/search';
     const resp = await axios.get(url, {
-      params: { query: 'apple', pageSize: 1, api_key: usdaApiKey },
+      params: { 
+        categories_tags: 'fruits',
+        fields: 'product_name,nutriments',
+        page_size: 1
+      },
       timeout: 4000,
     });
-    usdaStatus.reachable = true;
-    usdaStatus.status = resp.status;
-    usdaStatus.ok = resp.status >= 200 && resp.status < 300;
+    offStatus.reachable = true;
+    offStatus.status = resp.status;
+    offStatus.ok = resp.status >= 200 && resp.status < 300;
   } catch (e) {
-    usdaStatus.status = e.response?.status || null;
-    usdaStatus.error = e.message;
+    offStatus.status = e.response?.status || null;
+    offStatus.error = e.message;
     // Consider reachable if we got a response, even if not 2xx
-    if (e.response) usdaStatus.reachable = true;
+    if (e.response) offStatus.reachable = true;
   }
 
   // quick DB check
@@ -119,78 +122,93 @@ app.get('/health', async (req, res) => {
   return res.status(200).json(makeSuccess('Service health status', {
     server: 'ok',
     db: dbOk ? 'ok' : 'error',
-    usda: usdaStatus,
+    openFoodFacts: offStatus,
   }));
 });
 
-// Helper to get nutrition data from USDA
+// Helper to get nutrition data from Open Food Facts API (completely free!)
 const getNutritionData = async (foodName, quantity, unit) => {
-  const apiKey = process.env.USDA_API_KEY;
-  if (!apiKey) {
-    console.warn('USDA_API_KEY not set. Nutritional data will be null.');
-    return { calories: null, protein: null, carbs: null, fat: null };
-  }
-
   try {
-    // The USDA API works best with simple food names.
-    // We'll use the food name as the query.
-    const query = `${quantity} ${unit} ${foodName}`;
-    const usdaResponse = await axios.get('https://api.nal.usda.gov/fdc/v1/foods/search', {
+    console.log(`Searching for nutrition data for: ${foodName}`);
+    
+    // Search for food in Open Food Facts database
+    const searchResponse = await axios.get('https://world.openfoodfacts.org/api/v2/search', {
       params: {
-        api_key: apiKey,
-        query: foodName,
-        pageSize: 1, // Get the most relevant food
+        q: foodName,
+        fields: 'product_name,nutriments',
+        page_size: 5, // Get top 5 matches
+        json: 1
       },
+      timeout: 10000,
     });
 
-    if (!usdaResponse.data.foods || usdaResponse.data.foods.length === 0) {
-      console.warn(`USDA API returned no food matches for query: "${foodName}"`);
+    if (!searchResponse.data.products || searchResponse.data.products.length === 0) {
+      console.warn(`Open Food Facts API returned no matches for: "${foodName}"`);
       return { calories: null, protein: null, carbs: null, fat: null };
     }
 
-    const food = usdaResponse.data.foods[0];
-    const nutrients = {};
-    
-    // Nutrient IDs for common nutrients
-    const nutrientMap = {
-      '208': 'calories', // Energy in kcal
-      '203': 'protein',  // Protein
-      '205': 'carbs',    // Carbohydrate, by difference
-      '204': 'fat',      // Total lipid (fat)
-    };
-
-    food.foodNutrients.forEach(n => {
-      if (nutrientMap[n.nutrientId]) {
-        nutrients[nutrientMap[n.nutrientId]] = n.value;
+    // Get the first product that has nutrition data
+    let selectedProduct = null;
+    for (const product of searchResponse.data.products) {
+      if (product.nutriments && Object.keys(product.nutriments).length > 0) {
+        selectedProduct = product;
+        break;
       }
-    });
-
-    // The API returns values per 100g. We need to adjust for the user's quantity.
-    // This is a simplification; accurate conversion between units (e.g., cups to grams) is complex.
-    const servingSize = 100; // USDA data is per 100g/100ml
-    let multiplier = 1;
-
-    if (unit.toLowerCase() === 'grams' || unit.toLowerCase() === 'g') {
-      // If unit is grams, scale based on the 100g standard
-      multiplier = parseFloat(quantity) / servingSize;
-    } else {
-      // For other units ('servings', 'pieces', etc.), assume the API's 100g value is a reasonable default for one serving/piece.
-      // Then, multiply by the number of servings the user entered.
-      multiplier = parseFloat(quantity);
     }
 
-    // Round the results to 2 decimal places to avoid floating point inaccuracies
-    return {
-      calories: parseFloat(((nutrients.calories || 0) * multiplier).toFixed(2)),
-      protein: parseFloat(((nutrients.protein || 0) * multiplier).toFixed(2)),
-      carbs: parseFloat(((nutrients.carbs || 0) * multiplier).toFixed(2)),
-      fat: parseFloat(((nutrients.fat || 0) * multiplier).toFixed(2)),
+    if (!selectedProduct) {
+      console.warn(`No product with nutrition data found for: "${foodName}"`);
+      return { calories: null, protein: null, carbs: null, fat: null };
+    }
+
+    const nutriments = selectedProduct.nutriments;
+    console.log(`Found nutrition data for: ${selectedProduct.product_name}`);
+
+    // Extract nutrition values per 100g (Open Food Facts standard)
+    const nutritionPer100g = {
+      calories: nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || 0,
+      protein: nutriments['proteins_100g'] || nutriments['proteins'] || 0,
+      carbs: nutriments['carbohydrates_100g'] || nutriments['carbohydrates'] || 0,
+      fat: nutriments['fat_100g'] || nutriments['fat'] || 0,
     };
-  } catch (error) {
-    if (error.response && error.response.status === 403) {
-      console.error('CRITICAL: USDA API request failed with 403 Forbidden. This almost always means the USDA_API_KEY is missing or invalid in your environment variables.');
+
+    // Calculate nutrition values based on user's quantity and unit
+    let multiplier = 1;
+    const qty = parseFloat(quantity) || 0;
+
+    // Convert different units to grams for calculation
+    if (unit.toLowerCase().includes('g') || unit.toLowerCase() === 'grams') {
+      // Already in grams, calculate based on 100g standard
+      multiplier = qty / 100;
+    } else if (unit.toLowerCase().includes('kg') || unit.toLowerCase() === 'kilograms') {
+      // Convert kg to grams
+      multiplier = (qty * 1000) / 100;
+    } else if (unit.toLowerCase().includes('oz') || unit.toLowerCase() === 'ounces') {
+      // Convert ounces to grams (1 oz ≈ 28.35g)
+      multiplier = (qty * 28.35) / 100;
+    } else if (unit.toLowerCase().includes('lb') || unit.toLowerCase() === 'pounds') {
+      // Convert pounds to grams (1 lb ≈ 453.592g)
+      multiplier = (qty * 453.592) / 100;
+    } else {
+      // For other units (pieces, servings, cups, etc.), assume qty represents servings
+      // and use a reasonable serving size (e.g., 100g per serving)
+      multiplier = qty;
     }
-    console.error('Error fetching from USDA API:', error.message);
+
+    // Calculate final nutrition values and round to 2 decimal places
+    const finalNutrition = {
+      calories: parseFloat((nutritionPer100g.calories * multiplier).toFixed(2)),
+      protein: parseFloat((nutritionPer100g.protein * multiplier).toFixed(2)),
+      carbs: parseFloat((nutritionPer100g.carbs * multiplier).toFixed(2)),
+      fat: parseFloat((nutritionPer100g.fat * multiplier).toFixed(2)),
+    };
+
+    console.log(`Calculated nutrition for ${qty} ${unit} of ${foodName}:`, finalNutrition);
+    return finalNutrition;
+
+  } catch (error) {
+    console.error('Error fetching from Open Food Facts API:', error.message);
+    // Return null values but don't fail the request
     return { calories: null, protein: null, carbs: null, fat: null };
   }
 };
@@ -200,26 +218,31 @@ app.post('/api/food-log', async (req, res) => {
   const { food_name, quantity, unit } = req.body || {};
 
   if (!food_name || !quantity || !unit) {
-    return res.status(400).json(makeError('VALIDATION_ERROR', 'food_name is required', {
+    return res.status(400).json(makeError('VALIDATION_ERROR', 'Missing required fields', {
       details: { fields: ['food_name', 'quantity', 'unit'], reason: 'required' },
     }));
   }
 
   try {
-    // Fetch nutritional data
+    // Fetch nutritional data from Open Food Facts
     const nutrition = await getNutritionData(food_name, quantity, unit);
-
+    
     const result = await runExecute(
       `INSERT INTO food_logs (food_name, quantity, unit, calories, protein, carbs, fat) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [food_name, quantity, unit, nutrition.calories, nutrition.protein, nutrition.carbs, nutrition.fat]
     );
-    return res.status(201).json(makeSuccess('Food log created', { id: result.lastID }));
+
+    return res.status(201).json(makeSuccess('Food log created successfully', { 
+      id: result.lastID,
+      nutrition: nutrition
+    }));
   } catch (e) {
+    console.error('Database error:', e.message);
     return res.status(500).json(makeError('DB_ERROR', 'Failed to create food log', { details: e.message }));
   }
 });
 
-// Example: list food logs
+// List food logs
 app.get('/api/food-log', async (req, res) => {
   try {
     const rows = await runQuery('SELECT * FROM food_logs ORDER BY timestamp DESC LIMIT 100');
@@ -245,7 +268,7 @@ app.get('/api/daily-summary', async (req, res) => {
     );
 
     const foodItems = await runQuery(
-      `SELECT food_name as name, quantity, unit FROM food_logs WHERE date = ? ORDER BY timestamp DESC`,
+      `SELECT food_name as name, quantity, unit, calories, protein, carbs, fat FROM food_logs WHERE date = ? ORDER BY timestamp DESC`,
       [today]
     );
 
@@ -285,4 +308,5 @@ app.use((err, req, res, next) => {
 // Start server
 app.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
+  console.log('Using Open Food Facts API (completely free, no API key required)');
 });
